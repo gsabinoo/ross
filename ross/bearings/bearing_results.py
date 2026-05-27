@@ -361,6 +361,25 @@ class TiltingPadResults(BearingResults):
         self.ntheta_pad = ntheta_pad
         self.pad_radius = pad_radius
 
+    def _get_selected_pad_indices(self, pad_index):
+        """Return a list of pad indices to plot.
+
+        Parameters
+        ----------
+        pad_index : int or list[int] or None
+            Pad index (0-based), list of indices, or None to select all pads.
+
+        Returns
+        -------
+        list[int]
+            Validated list of pad indices.
+        """
+        if pad_index is None:
+            return list(range(self.n_pad))
+        if isinstance(pad_index, int):
+            return [pad_index]
+        return list(pad_index)
+
     def show_results(self):
         """Print a formatted summary of tilting pad bearing results.
 
