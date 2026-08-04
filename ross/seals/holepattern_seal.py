@@ -2,7 +2,7 @@ import numpy as np
 import multiprocessing
 from ross import SealElement
 from ross.units import Q_, check_units
-from ross.seals.gas_model import extract_gas_properties
+from ross.seals.gas_model import extract_gas_properties, IdealGas, RealGas
 from scipy.optimize import curve_fit
 from warnings import warn
 import plotly.graph_objects as go
@@ -86,6 +86,15 @@ class HolePatternSeal(SealElement):
         List with whirl frequency (rad/s).
     gas_composition : dict, optional
         Gas composition as a dictionary {component: molar_fraction}.
+    gas_model : str, optional
+        Thermodynamic model used at the inlet / pocket-storage touch points.
+        Specify "ideal" for the perfect-gas model (Z = 1, constant gamma); results
+        are identical to previous versions. The Mach bulk-flow ODEs always keep
+        the constant-gamma structure.
+        Specify "real" for the equation-of-state (real-gas) model, which corrects
+        inlet density, isentropic temperature, sound speed and pocket
+        compressibility from a table along the inlet isentrope. Requires
+        gas_composition. Default is "ideal".
     molar : float, pint.Quantity, optional
         Molecular mass (kg/kgmol). For Air: molar=28.97 kg/kgmol. Required if gas_composition is None.
         Default is None.
@@ -180,6 +189,7 @@ class HolePatternSeal(SealElement):
         inlet_temperature,
         frequency,
         gas_composition=None,
+        gas_model="ideal",
         molar=None,
         gamma=None,
         b_suther=None,
@@ -196,7 +206,7 @@ class HolePatternSeal(SealElement):
         **kwargs,
     ):
         for k, v in locals().items():
-            if k != "self":
+            if k != "self" and k != "kwargs":
                 setattr(self, k, v)
 
         if self.gas_composition is not None:
@@ -234,6 +244,29 @@ class HolePatternSeal(SealElement):
         self.R = R
         self.molar = molar
         self.gamma = gamma
+
+        if self.gas_model == "real":
+            if self.gas_composition is None:
+                raise ValueError(
+                    "gas_model='real' requires gas_composition to query the "
+                    "equation of state."
+                )
+            self.gas = RealGas(
+                self.R,
+                self.gamma,
+                self.gas_composition,
+                inlet_pressure,
+                outlet_pressure=outlet_pressure,
+                inlet_temperature=inlet_temperature,
+            )
+            self._real_gas = True
+        elif self.gas_model == "ideal":
+            self.gas = IdealGas(self.R, self.gamma)
+            self._real_gas = False
+        else:
+            raise ValueError(
+                f"Invalid gas_model {self.gas_model!r}; expected 'ideal' or 'real'."
+            )
 
         self.nmx = 2000
         self.omega = 0.0
@@ -356,11 +389,12 @@ class HolePatternSeal(SealElement):
         if m2_sq_term < 0:
             return 0, 0, 0, 0
         m2 = np.sqrt(m2_sq_term / self.gamma12)
-        T2 = self.inlet_temperature * (p2 / self.inlet_pressure) ** (
-            self.gamma1 / self.gamma
+        pr = p2 / self.inlet_pressure
+        T2 = self.gas.temperature_isentropic(
+            self.inlet_pressure, pr, self.inlet_temperature
         )
-        c2 = np.sqrt(self.gamma * self.R * T2)
-        mdot = (p2 / (self.R * T2)) * self.area * (m2 * c2)
+        c2 = self.gas.sound_speed(p2, T2)
+        mdot = self.gas.inlet_density(p2, T2) * self.area * (m2 * c2)
         mt2 = self.preswirl * (self.shaft_radius * self.omega) / c2
         p30_denom = (1.0 + self.gamma12 * m2**2) ** (self.gamma / self.gamma1)
         if p30_denom == 0:
@@ -1028,10 +1062,16 @@ class HolePatternSeal(SealElement):
             rho_base[iz] = mdot / (self.area * u_base[iz]) if u_base[iz] > 1e-9 else 0
         p_base = rho_base * self.R * t_base[: self.nz + 1]
 
-        xcos, pi_radius, deep = (
+        # Pocket storage depth: cell_depth * p / (rho a^2). For ideal gas this
+        # reduces to cell_depth / gamma. Evaluated at the inlet reference so the
+        # scalar remains compatible with the constant-gamma perturbation scheme.
+        rho_in = self.gas.inlet_density(self.inlet_pressure, self.inlet_temperature)
+        a_in = self.gas.sound_speed(self.inlet_pressure, self.inlet_temperature)
+        deep = self.cell_depth * self.inlet_pressure / (rho_in * a_in**2)
+
+        xcos, pi_radius = (
             1.0,
             np.pi * self.shaft_radius,
-            self.cell_depth / self.gamma,
         )
         pert = np.zeros((5, 4, self.nz + 1))
         whirl_freq = 0.0

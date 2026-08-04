@@ -48,6 +48,9 @@ class HybridSeal(SealElement):
     gas_composition : dict, optional
         Gas composition as a dictionary {component: molar_fraction}.
         Example: {"Nitrogen": 0.79, "Oxygen": 0.21} for air.
+    gas_model : str, optional
+        Thermodynamic model forwarded to both seal stages ("ideal" or "real").
+        Default is "ideal".
     molar : float, pint.Quantity, optional
         Molecular mass (kg/kgmol). For Air: molar=28.97 kg/kgmol.
         Required if gas_composition is None. Default is None.
@@ -215,6 +218,7 @@ class HybridSeal(SealElement):
         hole_pattern_parameters,
         labyrinth_parameters,
         gas_composition=None,
+        gas_model="ideal",
         molar=None,
         gamma=None,
         tolerance=1e-6,
@@ -244,6 +248,7 @@ class HybridSeal(SealElement):
                 frequency=frequency,
                 shaft_radius=shaft_radius,
                 gas_composition=gas_composition,
+                gas_model=gas_model,
                 molar=molar,
                 gamma=gamma,
                 **hole_pattern_parameters,
@@ -257,6 +262,7 @@ class HybridSeal(SealElement):
                 frequency=frequency,
                 shaft_radius=shaft_radius,
                 gas_composition=gas_composition,
+                gas_model=gas_model,
                 molar=molar,
                 gamma=gamma,
                 **labyrinth_parameters,

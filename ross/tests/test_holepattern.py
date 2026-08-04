@@ -329,3 +329,94 @@ def test_holepattern_coefficients(holepattern):
     assert_allclose(holepattern.cyx, 27.16217997, rtol=1e-4)
     assert_allclose(holepattern.cyy, 294.42942927, rtol=1e-4)
     assert_allclose(holepattern.seal_leakage, 0.6313559209954082, rtol=1e-4)
+
+
+# Real-gas (gas_model) tests — Option A (inlet / pocket touch points) ---------
+
+DENSE_GAS_PARAMS = {
+    "n": 0,
+    "frequency": Q_([5000], "RPM"),
+    "length": 0.0254,
+    "shaft_radius": 0.0751,
+    "radial_clearance": 0.0004,
+    "roughness": 0.00198,
+    "cell_length": 0.001,
+    "cell_width": 0.001,
+    "cell_depth": 0.00229,
+    "inlet_pressure": 8e6,
+    "outlet_pressure": 3e6,
+    "inlet_temperature": 300.0,
+    "preswirl": 0.5,
+    "entr_coef": 0.1,
+    "exit_coef": 0.5,
+}
+DENSE_GAS = {"Methane": 1.0}
+
+
+def test_holepattern_gas_model_default_is_ideal(holepattern_manual):
+    """The default backend is the perfect-gas model."""
+    assert holepattern_manual.gas_model == "ideal"
+    assert holepattern_manual._real_gas is False
+
+
+def test_holepattern_ideal_backend_unchanged(holepattern_manual):
+    """The ideal backend reproduces the legacy coefficients."""
+    assert_allclose(holepattern_manual.kxx[0], 586228.88958017, rtol=1e-9)
+    assert_allclose(holepattern_manual.kxy[0], 159741.17580073, rtol=1e-9)
+    assert_allclose(holepattern_manual.cxx[0], 294.42942927, rtol=1e-9)
+    assert_allclose(holepattern_manual.cxy[0], -27.16217997, rtol=1e-9)
+    assert_allclose(holepattern_manual.seal_leakage[0], 0.6313559209954082, rtol=1e-9)
+
+
+def test_holepattern_real_requires_gas_composition():
+    """gas_model='real' without gas_composition raises a clear error."""
+    with pytest.raises(ValueError, match="requires gas_composition"):
+        HolePatternSeal(**COMMON_PARAMS, **MANUAL_PARAMS, gas_model="real")
+
+
+def test_holepattern_invalid_gas_model():
+    """An unknown gas_model value raises a clear error."""
+    with pytest.raises(ValueError, match="Invalid gas_model"):
+        HolePatternSeal(
+            **COMMON_PARAMS, gas_composition=GAS_COMPOSITION, gas_model="bogus"
+        )
+
+
+def test_holepattern_real_gas_near_ideal():
+    """For near-ideal gas the real backend matches the ideal one."""
+    ideal = HolePatternSeal(**COMMON_PARAMS, gas_composition=GAS_COMPOSITION)
+    real = HolePatternSeal(
+        **COMMON_PARAMS, gas_composition=GAS_COMPOSITION, gas_model="real"
+    )
+
+    assert real.gas_model == "real"
+    assert real._real_gas is True
+    assert_allclose(real.kxx[0], ideal.kxx[0], rtol=0.01)
+    assert_allclose(real.kxy[0], ideal.kxy[0], rtol=0.01)
+    assert_allclose(real.cxx[0], ideal.cxx[0], rtol=0.01)
+    assert_allclose(real.seal_leakage[0], ideal.seal_leakage[0], rtol=0.01)
+
+
+def test_holepattern_real_gas_dense_gas():
+    """For a dense gas (Z < 1) Option A shifts coefficients via pocket storage.
+
+    Inlet density rises and sound speed falls along the isentrope, so the product
+    that sets the throttle mass flux (rho * a) nearly cancels and leakage stays
+    close to the ideal value. The pocket depth
+    ``cell_depth * p / (rho a**2)`` increases, which measurably moves stiffness.
+    """
+    ideal = HolePatternSeal(**DENSE_GAS_PARAMS, gas_composition=DENSE_GAS)
+    real = HolePatternSeal(
+        **DENSE_GAS_PARAMS, gas_composition=DENSE_GAS, gas_model="real"
+    )
+
+    assert np.isfinite(real.kxx[0])
+    assert np.isfinite(real.seal_leakage[0])
+    assert real.gas.inlet_density(
+        DENSE_GAS_PARAMS["inlet_pressure"], DENSE_GAS_PARAMS["inlet_temperature"]
+    ) > ideal.gas.inlet_density(
+        DENSE_GAS_PARAMS["inlet_pressure"], DENSE_GAS_PARAMS["inlet_temperature"]
+    )
+    assert_allclose(real.seal_leakage[0], ideal.seal_leakage[0], rtol=0.02)
+    # Pocket compressibility correction moves direct stiffness by more than 5%.
+    assert abs(real.kxx[0] - ideal.kxx[0]) / abs(ideal.kxx[0]) > 0.05
