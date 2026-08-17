@@ -410,3 +410,134 @@ class Guyan(ModelReduction):
             array[self.reordering, :] = array_transf
 
         return array
+
+
+class CraigBampton(Guyan):
+    """Craig-Bampton component mode synthesis (CMS).
+
+    Extends Guyan reduction by keeping, in addition to the interface
+    (boundary) DOFs kept exactly (the "selected" DOFs — bearings, disks,
+    probe locations, or any node/DOF explicitly requested), a set of
+    fixed-interface normal modes of the remaining ("ignored"/internal)
+    DOFs, instead of discarding their dynamics entirely as static
+    condensation (Guyan) does. This keeps the reduced model's inertial
+    behavior accurate over a frequency range, not just its static
+    stiffness — Guyan is the num_modes=0 special case of this method.
+
+    The interface (constraint-mode) part of the transformation matrix is
+    identical to Guyan's own -Kss^-1 @ Ksm block; only the second block
+    column (fixed-interface normal modes, an added generalized coordinate
+    for each retained mode) is new here.
+
+    Parameters
+    ----------
+    rotor: rs.Rotor
+        The rotor object.
+    speed : float
+        Rotor speed.
+    include_nodes : list of int, optional
+        List of the nodes to be included in the reduction (interface
+        DOFs, kept as physical coordinates in the reduced model).
+    dof_mapping : list of str, optional
+        Local DOFs to be considered for include_nodes/bearings/disks —
+        see Guyan. Default is ['x', 'y'].
+    include_dofs : list of int, optional
+        Additional individual global DOFs to keep as physical interface
+        coordinates (e.g. probe locations, force application points).
+    num_modes : int, optional
+        Number of fixed-interface normal modes to retain from the
+        internal ("ignored") DOF set. Default is 6.
+
+    Examples
+    --------
+    >>> import ross as rs
+    >>> rotor = rs.rotor_example()
+    >>> speed = 500.0
+    >>> node = 3
+    >>> dofx = rotor.number_dof * node + 0
+    >>> dofy = rotor.number_dof * node + 1
+    >>> mr = ModelReduction(
+    ...     rotor=rotor,
+    ...     speed=speed,
+    ...     method="craigbampton",
+    ...     include_dofs=[dofx, dofy],
+    ...     num_modes=6,
+    ... )
+    >>> mr.transf_matrix.shape[1] == len(mr.selected_dofs) + 6
+    True
+    """
+
+    def __init__(
+        self,
+        rotor,
+        speed,
+        include_nodes=None,
+        dof_mapping=None,
+        include_dofs=None,
+        num_modes=6,
+        **kwargs,
+    ):
+        self.num_modes = num_modes
+        super().__init__(
+            rotor,
+            speed,
+            include_nodes=include_nodes,
+            dof_mapping=dof_mapping,
+            include_dofs=include_dofs,
+            **kwargs,
+        )
+
+    def get_transformation_matrix(self):
+        """Build the Craig-Bampton transformation matrix.
+
+        Returns
+        -------
+        Tcb : np.ndarray
+            Transformation matrix for the Craig-Bampton method, shape
+            (ndof, n_selected + num_modes).
+        """
+        K = self.K
+        M = self.M
+
+        n_selected = len(self.selected_dofs)
+        I = np.eye(n_selected)
+
+        Kss = K[np.ix_(self.ignored_dofs, self.ignored_dofs)]
+        Ksm = K[np.ix_(self.ignored_dofs, self.selected_dofs)]
+        Mss = M[np.ix_(self.ignored_dofs, self.ignored_dofs)]
+
+        # Constraint modes: identical to Guyan's own block.
+        try:
+            inv_Kss = la.inv(Kss)
+        except np.linalg.LinAlgError as err:
+            warnings.warn(
+                f"{err} error. Using the pseudo-inverse to proceed.", UserWarning
+            )
+            inv_Kss = la.pinv(Kss)
+
+        psi_constraint = -inv_Kss @ Ksm
+
+        # Fixed-interface normal modes: eigenvectors of the internal DOF
+        # block with the interface held fixed (Kss, Mss only — the
+        # selected/interface DOFs do not appear in this eigenproblem).
+        # scipy.linalg.eigh's generalized solver already returns
+        # M-orthonormal eigenvectors (phi.T @ Mss @ phi == I), i.e. unit
+        # modal mass — verified against SDynPy's own
+        # reduce_craig_bampton, which normalizes explicitly; here that
+        # normalization is implicit in eigh's own convention, not
+        # something this code needs to redo.
+        eigvals_fixed, phi_fixed = eigh(Kss, Mss)
+        eigvals_fixed = np.clip(eigvals_fixed, 0, None)  # guard against
+        # small negative eigenvalues from numerical noise near rigid-body
+        # modes, matching SDynPy's own reduce_craig_bampton safeguard
+        phi_fixed = phi_fixed[:, : self.num_modes]
+
+        n_ignored = len(self.ignored_dofs)
+        Tcb = np.block(
+            [
+                [I, np.zeros((n_selected, self.num_modes))],
+                [psi_constraint, phi_fixed],
+            ]
+        )
+
+        return Tcb

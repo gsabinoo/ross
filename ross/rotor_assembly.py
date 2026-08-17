@@ -2811,9 +2811,17 @@ class Rotor(object):
         model_reduction = kwargs.get("model_reduction")
         if model_reduction:
             num_modes = model_reduction.get("num_modes")
+            method_given = "method" in model_reduction
             method = model_reduction.get("method", "guyan")
 
-            if num_modes or method == "pseudomodal":
+            if method == "pseudomodal" or (num_modes and not method_given):
+                # num_modes alone, with no explicit method, defaults to
+                # pseudomodal — preserves prior behavior. An explicitly
+                # requested method (e.g. "craigbampton", which also uses
+                # num_modes for its fixed-interface mode count) is never
+                # silently overridden: guyan and craigbampton both need
+                # physical interface DOFs (force_dofs) kept below, unlike
+                # pseudomodal's purely modal reduction.
                 method = "pseudomodal"
             else:
                 force_dofs = list(set(np.nonzero(F != 0)[1]))
