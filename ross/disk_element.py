@@ -56,9 +56,6 @@ class DiskElement(Element):
     @check_units
     def __init__(self, n, m, Id, Ip, tag=None, scale_factor=1.0, color="Firebrick"):
         self.n = int(n)
-        self.n_l = n
-        self.n_r = n
-
         self.m = float(m)
         self.Id = float(Id)
         self.Ip = float(Ip)
@@ -88,7 +85,7 @@ class DiskElement(Element):
         True
         """
         false_number = 0
-        if "DiskElement" in other.__class__.__name__:
+        if isinstance(other, DiskElement):
             for i in self.__dict__:
                 try:
                     if np.allclose(self.__dict__[i], other.__dict__[i]):
@@ -663,7 +660,7 @@ class DiskElement(Element):
         >>> file_path = os.path.dirname(os.path.realpath(__file__)) + '/data/shaft_si.xls'
         >>> list_of_disks = DiskElement.from_table(file_path, sheet_name="More")
         >>> list_of_disks[0]
-        DiskElement(Id=0.0, Ip=0.0, m=15.12, color='Firebrick', n=3, scale_factor=1, tag=None)
+        DiskElement(Id=0.0, Ip=0.0, m=13.91, color='Firebrick', n=3, scale_factor=1, tag=None)
         """
         parameters = read_table_file(file, "disk", sheet_name=sheet_name)
         if tag is None:
